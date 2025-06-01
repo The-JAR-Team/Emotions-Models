@@ -626,12 +626,13 @@ if __name__ == "__main__":
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         per_device_eval_batch_size=BATCH_SIZE,
-        warmup_ratio=0.1, # Warmup over 10% of training steps
+        warmup_ratio=0.1,  # Warmup over 10% of training steps
         weight_decay=WEIGHT_DECAY,
         learning_rate=LEARNING_RATE,
+        max_grad_norm=1.0,  # Gradient clipping
         logging_dir=os.path.join(MODEL_DIR, "training_logs"),
-        logging_steps=max(10, int(len(train_emotion_dataset) / (BATCH_SIZE * 10))), # Log ~10 times per epoch
-        eval_strategy="epoch", # Changed from evaluation_strategy
+        logging_steps=max(10, int(len(train_emotion_dataset) / (BATCH_SIZE * 10))),  # Log ~10 times per epoch
+        eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
@@ -640,7 +641,7 @@ if __name__ == "__main__":
         report_to="tensorboard",
         dataloader_num_workers=DATALOADER_NUM_WORKERS,
         dataloader_pin_memory=True,
-        remove_unused_columns=False, # Important if dataset returns more than model expects
+        remove_unused_columns=False,
     )
 
     trainer = Trainer(
