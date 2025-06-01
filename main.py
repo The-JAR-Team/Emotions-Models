@@ -67,7 +67,7 @@ DROPOUT = 0.2       # Lower dropout to help with capacity
 # Training Hyperparameters
 BATCH_SIZE = 64 # Increased slightly, adjust based on GPU memory
 LEARNING_RATE = 0.001
-NUM_EPOCHS = 50 # Increased for a bit more training, still relatively short for full convergence
+NUM_EPOCHS = 60 # Increased for a bit more training, still relatively short for full convergence
 WEIGHT_DECAY = 0.02
 DATALOADER_NUM_WORKERS = 0 # As requested
 
@@ -649,7 +649,7 @@ if __name__ == "__main__":
         train_dataset=train_emotion_dataset,
         eval_dataset=eval_emotion_dataset,
         compute_metrics=compute_metrics_fn,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]  # stops if no improvement for 3 evaluations
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=10)]  # stops if no improvement for 3 evaluations
     )
 
     print("\n--- Starting Training ---")
