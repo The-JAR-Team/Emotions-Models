@@ -56,7 +56,7 @@ REPORT_PATH = os.path.join(MODEL_DIR, "training_report.json")
 NUM_CLASSES = 8
 
 NUM_LANDMARKS = 478 # Using refine_landmarks=True for FaceMesh
-LANDMARK_DIM = 2 # Using (x, y) coordinates, normalized
+LANDMARK_DIM = 3 # Using (x, y) coordinates, normalized
 
 # Model Hyperparameters (can be tuned)
 D_MODEL = 128       # Embedding dimension for Transformer
