@@ -11,4 +11,7 @@ __pycache__/
 *.egg-info/
 .vscode/
 archive/
-emotion_transformer_affectnet_model/
+!emotion_transformer_affectnet_model/
+emotion_transformer_affectnet_model/*
+!emotion_transformer_affectnet_model/training_checkpoints/
+!emotion_transformer_affectnet_model/training_checkpoints/**
