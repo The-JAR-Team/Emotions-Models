@@ -71,6 +71,8 @@ NUM_EPOCHS = 50 # Increased for a bit more training, still relatively short for 
 WEIGHT_DECAY = 0.02
 DATALOADER_NUM_WORKERS = 0 # As requested
 
+START_FROM_CHECKPOINT = False # Set to False to train from scratch
+
 # --- MediaPipe Landmark Extraction ---
 # Initialize MediaPipe FaceMesh solution
 # It's better to initialize it once globally if possible,
@@ -92,8 +94,8 @@ except Exception as e:
 
 def extract_landmarks_from_image(image_np_rgb, processor=face_mesh_processor):
     """
-    Extracts 478 MediaPipe face landmarks from a single RGB image.
-    Normalizes landmarks by centering on nose and scaling by inter-ocular distance (more robust).
+    Extracts 478 MediaPipe face landmarks (x, y, z) from a single RGB image.
+    Normalizes landmarks by centering on nose and scaling by inter-ocular distance.
     """
     if processor is None:
         return np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32), False
@@ -103,52 +105,53 @@ def extract_landmarks_from_image(image_np_rgb, processor=face_mesh_processor):
     if results.multi_face_landmarks:
         face_landmarks_mp = results.multi_face_landmarks[0]
         
-        landmarks_px = np.array(
-            [(lm.x * image_np_rgb.shape[1], lm.y * image_np_rgb.shape[0]) for lm in face_landmarks_mp.landmark],
+        image_height, image_width, _ = image_np_rgb.shape
+
+        # Extract x, y, z coordinates.
+        # lm.z is scaled by image_width as its magnitude is roughly proportional to x/y screen coordinates.
+        # MediaPipe's z coordinate has the origin at the center of the head.
+        landmarks_abs_3d = np.array(
+            [(lm.x * image_width, lm.y * image_height, lm.z * image_width) 
+             for lm in face_landmarks_mp.landmark],
             dtype=np.float32
         )
 
-        if landmarks_px.shape[0] != NUM_LANDMARKS: # Should not happen with refine_landmarks=True
-            # print(f"Warning: Expected {NUM_LANDMARKS} landmarks, got {landmarks_px.shape[0]}. Skipping.")
+        if landmarks_abs_3d.shape != (NUM_LANDMARKS, 3): # Expect 3 for x,y,z
+            # print(f"Warning: Expected ({NUM_LANDMARKS}, 3) landmarks, got {landmarks_abs_3d.shape}. Skipping.")
             return np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32), False
 
         # Normalization:
         # 1. Center around a stable point (e.g., nose tip - landmark 1)
-        nose_tip = landmarks_px[1].copy()
-        landmarks_normalized = landmarks_px - nose_tip
-        
+        # Nose tip landmark (index 1) coordinates (x, y, z)
+        nose_tip_3d = landmarks_abs_3d[1].copy() 
+        landmarks_centered_3d = landmarks_abs_3d - nose_tip_3d # Broadcasting subtraction for all 3 coords
+
         # 2. Scale by a robust distance, e.g., inter-ocular distance
-        # Left eye: landmark 473 (outer corner), Right eye: landmark 468 (outer corner)
-        # These are iris landmarks. For eye corners, better use e.g., 33 (left) and 263 (right) for outer eye corners
-        # Or for pupils: 468 (right pupil), 473 (left pupil) when refine_landmarks=True
-        # Let's use outer eye corners for scaling (more stable than mouth for all expressions)
-        # Check MediaPipe landmark map: left eye outer: 33, right eye outer: 263
-        # Or if using refined landmarks: left eye outer contour: 130, right eye outer contour: 359
-        # Let's use specific points that should be consistently available.
-        # Example: Left eye (landmark indices around 33, 133), Right eye (landmark indices around 263, 362)
-        # For simplicity and consistency:
-        # Left eye corner (approx): landmarks_normalized[33]
-        # Right eye corner (approx): landmarks_normalized[263]
-        # This assumes these indices are valid within the 478 set.
-        # A quick check on mediapipe viz:
-        # Left eye outer corner: 33
-        # Right eye outer corner: 263
-        # Left eye inner corner: 133
-        # Right eye inner corner: 362
-        # Let's use distance between 133 and 362 (inner eye corners)
-        p_left_eye_inner = landmarks_normalized[133]
-        p_right_eye_inner = landmarks_normalized[362]
+        # Calculated from the x,y components of the centered inner eye landmarks.
+        # Left eye inner corner (landmark 133), Right eye inner corner (landmark 362)
+        # We use the x,y components from the centered 3D landmarks.
+        p_left_eye_inner_xy = landmarks_centered_3d[133, :2]  # (x,y) of landmark 133
+        p_right_eye_inner_xy = landmarks_centered_3d[362, :2]  # (x,y) of landmark 362
         
-        inter_ocular_distance = np.linalg.norm(p_left_eye_inner - p_right_eye_inner)
+        inter_ocular_distance = np.linalg.norm(p_left_eye_inner_xy - p_right_eye_inner_xy)
         
         if inter_ocular_distance < 1e-6: # Avoid division by zero
             # print("Warning: Inter-ocular distance is near zero. Using default scale.")
-            inter_ocular_distance = image_np_rgb.shape[1] / 4.0 # Fallback scale
-            if inter_ocular_distance < 1e-6: inter_ocular_distance = 1.0
+            inter_ocular_distance = image_width / 4.0 # Fallback scale based on image width
+            if inter_ocular_distance < 1e-6: 
+                inter_ocular_distance = 1.0 # Absolute fallback
 
-        landmarks_normalized /= inter_ocular_distance
+        # Scale all three (x, y, z) coordinates of the centered landmarks
+        landmarks_normalized_3d = landmarks_centered_3d / inter_ocular_distance
         
-        return landmarks_normalized[:, :LANDMARK_DIM], True # Return (x,y) and success
+        # Ensure the final shape matches LANDMARK_DIM (which should be 3)
+        if landmarks_normalized_3d.shape != (NUM_LANDMARKS, LANDMARK_DIM):
+            # print(f"Warning: Final normalized landmark shape {landmarks_normalized_3d.shape} "
+            #       f"does not match expected ({NUM_LANDMARKS}, {LANDMARK_DIM}). Returning zeros.")
+            return np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32), False
+            
+        return landmarks_normalized_3d, True
+        
     return np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32), False
 
 # --- PyTorch Dataset ---
@@ -406,6 +409,19 @@ def print_usage_instructions(model_dir, onnx_path, num_lm, lm_dim):
     print("  #     embedding = outputs['embedding'] # Shape: (batch_size, d_model)")
     print("  #     logits = outputs['logits']")
 
+# --- Function to find the latest checkpoint ---
+def get_latest_checkpoint(checkpoint_dir):
+    if not os.path.isdir(checkpoint_dir):
+        return None
+    
+    checkpoints = glob.glob(os.path.join(checkpoint_dir, "checkpoint-*"))
+    if not checkpoints:
+        return None
+        
+    latest_checkpoint = max(checkpoints, key=os.path.getmtime)
+    print(f"Found latest checkpoint: {latest_checkpoint}")
+    return latest_checkpoint
+
 # --- Main Script ---
 if __name__ == "__main__":
     print("Starting Emotion Recognition Training...")
@@ -638,8 +654,18 @@ if __name__ == "__main__":
 
     print("\n--- Starting Training ---")
     start_time = time.time()
+    
+    checkpoint_to_resume = None
+    if START_FROM_CHECKPOINT:
+        checkpoint_dir = os.path.join(MODEL_DIR, "training_checkpoints")
+        checkpoint_to_resume = get_latest_checkpoint(checkpoint_dir)
+        if checkpoint_to_resume:
+            print(f"Attempting to resume training from: {checkpoint_to_resume}")
+        else:
+            print("No checkpoint found, or START_FROM_CHECKPOINT is False. Starting training from scratch.")
+            
     try:
-        trainer.train()
+        trainer.train(resume_from_checkpoint=checkpoint_to_resume)
     except Exception as e:
         print(f"An error occurred during training: {e}")
         if "CUDA out of memory" in str(e):
