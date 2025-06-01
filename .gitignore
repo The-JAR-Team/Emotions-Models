@@ -13,5 +13,7 @@ __pycache__/
 archive/
 !emotion_transformer_affectnet_model/
 emotion_transformer_affectnet_model/*
+!emotion_transformer_affectnet_model/*.onnx
 !emotion_transformer_affectnet_model/training_checkpoints/
 !emotion_transformer_affectnet_model/training_checkpoints/**
+!emotion_transformer_affectnet_model/training_checkpoints/**/*.onnx

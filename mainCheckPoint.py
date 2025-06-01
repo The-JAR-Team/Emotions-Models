@@ -626,7 +626,7 @@ if __name__ == "__main__":
             input_names=['pixel_values'],
             output_names=['logits', 'embedding'],
             dynamic_axes=dynamic_axes,
-            opset_version=13, 
+            opset_version=14, # Changed to 14 to support aten::scaled_dot_product_attention
             export_params=True
         )
         print("ONNX model exported successfully.")
