@@ -1,26 +1,12 @@
 # Single-file script for training a Transformer Encoder for emotion recognition
 # using MediaPipe landmarks, with Hugging Face Trainer, and ONNX export.
-#
-# Instructions:
-# 1. Install necessary packages:
-#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 # Adjust cuXXX for your CUDA version
-#    pip install datasets transformers huggingface_hub scikit-learn mediapipe opencv-python protobuf==3.20.0 onnx onnxruntime
-#    pip install kagglehub pandas
-#    (Note: Specific protobuf version might be needed for MediaPipe compatibility on some systems)
-#
-# 2. Dataset Note:
-#    This script uses Kaggle AffectNet dataset via kagglehub.
-#    AffectNet has 8 emotion classes: 0:Neutral, 1:Happy, 2:Sad, 3:Surprise, 4:Fear, 5:Disgust, 6:Anger, 7:Contempt
-#
-# 3. Running the script:
-#    python your_script_name.py
-#    It will download AffectNet, preprocess, train, save models (PyTorch & ONNX), and print a report.
+# This script is modified to resume training from the latest checkpoint.
 
 import os
 import shutil
 import time
 import json
-import glob # For finding files if using local AffectNet
+import glob # For finding files
 import pandas as pd
 
 # Kaggle dataset loading
@@ -61,15 +47,15 @@ LANDMARK_DIM = 2 # Using (x, y) coordinates, normalized
 # Model Hyperparameters (can be tuned)
 D_MODEL = 128       # Embedding dimension for Transformer
 NHEAD = 4           # Number of attention heads
-NUM_ENCODER_LAYERS = 4 # Number of Transformer encoder layers
+NUM_ENCODER_LAYERS = 3 # Number of Transformer encoder layers
 DIM_FEEDFORWARD = 256 # Dimension of feedforward network in Transformer
-DROPOUT = 0.3
+DROPOUT = 0.1
 
 # Training Hyperparameters
 BATCH_SIZE = 64 # Increased slightly, adjust based on GPU memory
-LEARNING_RATE = 0.001
-NUM_EPOCHS = 50 # Increased for a bit more training, still relatively short for full convergence
-WEIGHT_DECAY = 0.02
+LEARNING_RATE = 1e-4
+NUM_EPOCHS = 10 # Increased for a bit more training, still relatively short for full convergence
+WEIGHT_DECAY = 0.01
 DATALOADER_NUM_WORKERS = 0 # As requested
 
 # --- MediaPipe Landmark Extraction ---
@@ -407,9 +393,22 @@ def print_usage_instructions(model_dir, onnx_path, num_lm, lm_dim):
     print("  #     embedding = outputs['embedding'] # Shape: (batch_size, d_model)")
     print("  #     logits = outputs['logits']")
 
+# --- Function to find the latest checkpoint ---
+def get_latest_checkpoint(checkpoint_dir):
+    if not os.path.isdir(checkpoint_dir):
+        return None
+    
+    checkpoints = glob.glob(os.path.join(checkpoint_dir, "checkpoint-*"))
+    if not checkpoints:
+        return None
+        
+    latest_checkpoint = max(checkpoints, key=os.path.getmtime)
+    print(f"Found latest checkpoint: {latest_checkpoint}")
+    return latest_checkpoint
+
 # --- Main Script ---
 if __name__ == "__main__":
-    print("Starting Emotion Recognition Training...")
+    print("Starting Emotion Recognition Training (Resuming from Checkpoint)...")
     print(f"Device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
     
     if face_mesh_processor is None:
@@ -421,12 +420,8 @@ if __name__ == "__main__":
     # AffectNet labels: 0:Neutral, 1:Happy, 2:Sad, 3:Surprise, 4:Fear, 5:Disgust, 6:Anger, 7:Contempt
     # This matches NUM_CLASSES = 8
     try:
-        # print("Downloading AffectNet dataset from Kaggle...") # Original Kaggle download
-        # path = kagglehub.dataset_download("mstjebashazida/affectnet") # Original Kaggle download
-        # print(f"Dataset downloaded to: {path}") # Original Kaggle download
-
         # Define the path to the parent of 'archive (3)' directory
-        local_dataset_main_dir = r"D:\\Documnts2\\forJohn\\archive"
+        local_dataset_main_dir = r"D:\Documnts2\forJohn\archive"
         # Define the specific data directory name (where labels.csv, Test/, Train/ reside)
         data_sub_dir_name = "archive (3)"
         # Construct the full path to the data directory to be walked
@@ -441,18 +436,10 @@ if __name__ == "__main__":
             for file in files:
                 all_files_in_local_dir.append(os.path.join(root, file))
         
-        print("Available files in the local dataset directory (first 10):")
-        for file in all_files_in_local_dir[:10]:
-            print(f"  {file}")
-        if len(all_files_in_local_dir) > 10:
-            print(f"  ... and {len(all_files_in_local_dir) - 10} more files")
-        
         # Look for CSV files first in the local directory
         csv_files = [f for f in all_files_in_local_dir if f.lower().endswith('.csv')]
         
         if csv_files:
-            print(f"Found {len(csv_files)} CSV file(s) in local dataset.")
-            # Prefer 'labels.csv' if it's directly in dataset_root_to_walk, otherwise take the first found.
             csv_file_to_load = csv_files[0] 
             preferred_csv_file = os.path.join(dataset_root_to_walk, "labels.csv")
             if preferred_csv_file in csv_files:
@@ -460,144 +447,85 @@ if __name__ == "__main__":
             elif any("labels.csv" in os.path.basename(f) for f in csv_files):
                  try:
                     csv_file_to_load = next(f for f in csv_files if "labels.csv" in os.path.basename(f))
-                 except StopIteration: # Should not happen if any() was true
-                    pass # Stick with csv_files[0]
+                 except StopIteration: 
+                    pass 
 
             print(f"Loading: {csv_file_to_load}")
             df = pd.read_csv(csv_file_to_load)
         else:
-            # If no CSV, look for other formats in the local directory
             parquet_files = [f for f in all_files_in_local_dir if f.lower().endswith('.parquet')]
             json_files = [f for f in all_files_in_local_dir if f.lower().endswith(('.json', '.jsonl'))]
             
             if parquet_files:
-                print(f"Loading parquet file: {parquet_files[0]}")
                 df = pd.read_parquet(parquet_files[0])
             elif json_files:
-                print(f"Loading JSON file: {json_files[0]}")
                 df = pd.read_json(json_files[0])
             else:
-                print("No supported data files found in local dataset directory. Available files:")
-                for file in all_files_in_local_dir: # Corrected iteration variable
-                    print(f"  {file}")
                 raise Exception("No supported data format found in the local dataset directory")
         
-        print("First 5 records:", df.head())
-        print(f"Dataset shape: {df.shape}")
-        print(f"Columns: {df.columns.tolist()}")
-
         # Helper function to determine the correct image path
         def determine_actual_image_path(pth_value, root_dir_for_images):
-            # pth_value is like "emotion/image.jpg" or "happy/ffhq_3513.png"
-            # root_dir_for_images is the path to 'archive (3)'
-            
-            # Ensure pth_value is treated as relative path components
-            # Handles both '/' and '\\' as separators in pth_value if any, then splits
             normalized_pth = pth_value.replace('/', os.sep)
             path_components = normalized_pth.split(os.sep)
-
             test_image_path = os.path.join(root_dir_for_images, 'Test', *path_components)
             if os.path.exists(test_image_path):
                 return test_image_path
-            
             train_image_path = os.path.join(root_dir_for_images, 'Train', *path_components)
             if os.path.exists(train_image_path):
                 return train_image_path
-            
-            # print(f"Debug: Image for pth='{pth_value}' not found in Test or Train. Checked Test: '{test_image_path}', Train: '{train_image_path}'")
             return None
 
-        # Apply the function to create the 'image_path' column
         df['image_path'] = df['pth'].apply(lambda x: determine_actual_image_path(x, dataset_root_to_walk))
-
-        # Report and remove rows where images were not found
         original_len = len(df)
         df.dropna(subset=['image_path'], inplace=True)
         new_len = len(df)
         if new_len < original_len:
-            print(f"INFO: Dropped {original_len - new_len} rows out of {original_len} because their images could not be found in Test/ or Train/ subdirectories relative to '{dataset_root_to_walk}'.")
+            print(f"INFO: Dropped {original_len - new_len} rows because images were not found.")
         
         if len(df) == 0:
-            print(f"ERROR: No usable image paths found after checking Test/ and Train/ folders for pth values from {csv_file_to_load}. Please check 'pth' column and directory structure.")
+            print("ERROR: No usable image paths found. Exiting.")
             exit()
         
-        print(f"After verifying image paths, dataset shape: {df.shape}")
-
-        # Check for emotion/label columns and determine the mapping
         emotion_col = None
-        if 'emotion' in df.columns:
-            emotion_col = 'emotion'        
-        elif 'label' in df.columns:
-            emotion_col = 'label'
-        elif 'expression' in df.columns:
-            emotion_col = 'expression'
+        if 'emotion' in df.columns: emotion_col = 'emotion'        
+        elif 'label' in df.columns: emotion_col = 'label'
+        elif 'expression' in df.columns: emotion_col = 'expression'
         else:
-            # Look for any column that might contain emotion labels
             for col in df.columns:
                 if 'emotion' in col.lower() or 'expression' in col.lower() or 'label' in col.lower():
                     emotion_col = col
                     break
-        
         if emotion_col is None:
-            print("ERROR: Could not find emotion/label column in the dataset")
-            print(f"Available columns: {df.columns.tolist()}")
+            print("ERROR: Could not find emotion/label column. Exiting.")
             exit()
         
-        print(f"Using '{emotion_col}' as emotion label column")
-        print(f"Unique emotion labels: {sorted(df[emotion_col].unique())}")
-        
-        emotion_mapping = {
-            'neutral': 0, 'happy': 1, 'sad': 2, 'surprise': 3,
-            'fear': 4, 'disgust': 5, 'anger': 6, 'contempt': 7
-        }
-        
+        emotion_mapping = {'neutral': 0, 'happy': 1, 'sad': 2, 'surprise': 3, 'fear': 4, 'disgust': 5, 'anger': 6, 'contempt': 7}
         valid_emotions = list(emotion_mapping.keys())
         df = df[df[emotion_col].isin(valid_emotions)]
-        print(f"After filtering for 8 emotions, dataset shape: {df.shape}")
-        
         if len(df) == 0:
-            print("ERROR: No valid emotion samples found after filtering")
-            # print("Available emotion labels:", df[emotion_col].unique()) # df is empty here
+            print("ERROR: No valid emotion samples after filtering. Exiting.")
             exit()
-        
         df['mapped_emotion'] = df[emotion_col].map(emotion_mapping)
         
-        # Add image paths - construct full paths from the 'pth' column # This line is now replaced by the logic above
-        # df['image_path'] = df['pth'].apply(lambda x: os.path.join(dataset_root_to_walk, 'Test', x.replace('/', os.sep))) # OLD LOGIC
-        
-        # Split the dataset into train/validation/test
-        # Use stratified split to maintain emotion distribution
         train_df, temp_df = train_test_split(df, test_size=0.3, stratify=df['mapped_emotion'], random_state=42)
         val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df['mapped_emotion'], random_state=42)
         
-        print(f"Train set size: {len(train_df)}")
-        print(f"Validation set size: {len(val_df)}")
-        print(f"Test set size: {len(test_df)}")
-        
     except Exception as e:
         print(f"Failed to load AffectNet dataset: {e}")
-        print("Please check your internet connection and kagglehub installation.")
         exit()
     
-    # For faster demo, uncomment these lines to use smaller subsets
-    # print("INFO: Using smaller subsets for DEMO purposes.")
-    # train_df = train_df.sample(n=int(0.02 * len(train_df)), random_state=42)
-    # val_df = val_df.sample(n=int(0.05 * len(val_df)), random_state=42)
-    # test_df = test_df.sample(n=int(0.05 * len(test_df)), random_state=42)
-
     print(f"Using Train dataset size: {len(train_df)}")
     print(f"Using Validation dataset size: {len(val_df)}")
     print(f"Using Test dataset size: {len(test_df)}")
 
     print("\n--- Initializing PyTorch Datasets with Landmark Extraction ---")
-    # Create PyTorch datasets from the dataframes
     train_emotion_dataset = AffectNetKaggleDataset(train_df, "train")
     eval_emotion_dataset = AffectNetKaggleDataset(val_df, "validation")
     test_emotion_dataset = AffectNetKaggleDataset(test_df, "test")
 
     # --- 2. Initialize Model ---
     print("\n--- Initializing Model ---")
-    config = EmotionTransformerConfig(num_classes=NUM_CLASSES) # NUM_CLASSES is 8 for FER+
+    config = EmotionTransformerConfig(num_classes=NUM_CLASSES)
     model = EmotionTransformerModel(config)
     print(f"Model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
 
@@ -606,17 +534,20 @@ if __name__ == "__main__":
     if not os.path.exists(MODEL_DIR):
         os.makedirs(MODEL_DIR)
 
+    checkpoint_dir = os.path.join(MODEL_DIR, "training_checkpoints")
+    latest_checkpoint_path = get_latest_checkpoint(checkpoint_dir)
+
     training_args = TrainingArguments(
-        output_dir=os.path.join(MODEL_DIR, "training_checkpoints"),
+        output_dir=checkpoint_dir,
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         per_device_eval_batch_size=BATCH_SIZE,
-        warmup_ratio=0.1, # Warmup over 10% of training steps
+        warmup_ratio=0.1,
         weight_decay=WEIGHT_DECAY,
         learning_rate=LEARNING_RATE,
         logging_dir=os.path.join(MODEL_DIR, "training_logs"),
-        logging_steps=max(10, int(len(train_emotion_dataset) / (BATCH_SIZE * 10))), # Log ~10 times per epoch
-        eval_strategy="epoch", # Changed from evaluation_strategy
+        logging_steps=max(10, int(len(train_emotion_dataset) / (BATCH_SIZE * 10))),
+        eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
@@ -625,7 +556,7 @@ if __name__ == "__main__":
         report_to="tensorboard",
         dataloader_num_workers=DATALOADER_NUM_WORKERS,
         dataloader_pin_memory=True,
-        remove_unused_columns=False, # Important if dataset returns more than model expects
+        remove_unused_columns=False,
     )
 
     trainer = Trainer(
@@ -634,20 +565,18 @@ if __name__ == "__main__":
         train_dataset=train_emotion_dataset,
         eval_dataset=eval_emotion_dataset,
         compute_metrics=compute_metrics_fn,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]  # stops if no improvement for 3 evaluations
     )
 
     print("\n--- Starting Training ---")
     start_time = time.time()
     try:
-        trainer.train()
+        # Pass latest_checkpoint_path to trainer.train()
+        # If latest_checkpoint_path is None, it starts fresh (or from model_init if specified)
+        trainer.train(resume_from_checkpoint=latest_checkpoint_path) 
     except Exception as e:
         print(f"An error occurred during training: {e}")
         if "CUDA out of memory" in str(e):
-            print("CUDA OOM: Try reducing BATCH_SIZE or model size (D_MODEL, NUM_ENCODER_LAYERS).")
-        if os.path.exists(training_args.output_dir):
-            print(f"Cleaning up incomplete checkpoint directory: {training_args.output_dir}")
-            # shutil.rmtree(training_args.output_dir) # Be careful with auto-deleting
+            print("CUDA OOM: Try reducing BATCH_SIZE or model size.")
         exit()
         
     training_time = time.time() - start_time
@@ -668,7 +597,7 @@ if __name__ == "__main__":
 
     # --- 5. Save Model & Report ---
     print("\n--- Saving Models and Report ---")
-    model.save_pretrained(MODEL_DIR)
+    model.save_pretrained(MODEL_DIR) # Saves the best model due to load_best_model_at_end=True
     print(f"PyTorch model and config saved to {MODEL_DIR}")
 
     model.eval()
@@ -679,8 +608,6 @@ if __name__ == "__main__":
         print(f"Exporting model to ONNX at {ONNX_MODEL_PATH}...")
         dynamic_axes = {'pixel_values': {0: 'batch_size'}, 'logits': {0: 'batch_size'}, 'embedding': {0: 'batch_size'}}
         
-        # Wrapper to select specific outputs for ONNX if needed, or export all.
-        # The model returns a dict. Let's export logits and embedding.
         class OnnxWrapper(nn.Module):
             def __init__(self, model_to_wrap):
                 super().__init__()
@@ -697,12 +624,12 @@ if __name__ == "__main__":
             dummy_input_landmarks,
             ONNX_MODEL_PATH,
             input_names=['pixel_values'],
-            output_names=['logits', 'embedding'], # Exporting both
+            output_names=['logits', 'embedding'],
             dynamic_axes=dynamic_axes,
-            opset_version=11, # Changed to 11 for broader compatibility
+            opset_version=14, # Changed to 14 to support aten::scaled_dot_product_attention
             export_params=True
         )
-        print("ONNX model exported successfully (outputs: logits, embedding).")
+        print("ONNX model exported successfully.")
 
         try:
             import onnxruntime
@@ -715,12 +642,13 @@ if __name__ == "__main__":
     except Exception as e: print(f"Error exporting to ONNX: {e}")
 
     report = {
-        "dataset_used": "Piro17/affectnethq (with on-the-fly MediaPipe landmark extraction)",
+        "dataset_used": "Local AffectNet (D:\\Documnts2\\forJohn\\archive\\archive (3))",
         "model_configuration": model.config.to_dict(),
         "training_arguments": {k: str(v) if not isinstance(v, (int, float, str, bool, list, dict, type(None))) else v 
-                               for k, v in training_args.to_dict().items()}, # Basic serialization
+                               for k, v in training_args.to_dict().items()},
         "training_time_minutes": training_time / 60,
         "test_set_metrics": final_test_metrics,
+        "resumed_from_checkpoint": latest_checkpoint_path,
         "landmark_extraction_stats": {}
     }
     if hasattr(train_emotion_dataset, 'successful_extractions'):
@@ -746,5 +674,3 @@ if __name__ == "__main__":
     print("\n--- Script Finished ---")    
     if face_mesh_processor:
         face_mesh_processor.close()
-
-

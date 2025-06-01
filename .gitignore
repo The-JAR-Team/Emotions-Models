@@ -11,4 +11,13 @@ __pycache__/
 *.egg-info/
 .vscode/
 archive/
+<<<<<<< HEAD
 emotion_transformer_affectnet_model/
+=======
+!emotion_transformer_affectnet_model/
+emotion_transformer_affectnet_model/*
+!emotion_transformer_affectnet_model/*.onnx
+!emotion_transformer_affectnet_model/training_checkpoints/
+!emotion_transformer_affectnet_model/training_checkpoints/**
+!emotion_transformer_affectnet_model/training_checkpoints/**/*.onnx
+>>>>>>> a201792 (we have a checkpintsndtofhnsdf;aslkodf)
