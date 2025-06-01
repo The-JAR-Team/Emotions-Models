@@ -32,9 +32,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms # Not used directly for landmarks, but often for image datasets
-
 from datasets import load_dataset, concatenate_datasets, Image as HFImage # HFImage for casting
-from transformers import TrainingArguments, Trainer, PreTrainedModel, PretrainedConfig
+from transformers import TrainingArguments, Trainer, PreTrainedModel, PretrainedConfig, EarlyStoppingCallback
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from sklearn.model_selection import train_test_split # For custom dataset splits
 
@@ -56,7 +55,7 @@ REPORT_PATH = os.path.join(MODEL_DIR, "training_report.json")
 NUM_CLASSES = 8
 
 NUM_LANDMARKS = 478 # Using refine_landmarks=True for FaceMesh
-LANDMARK_DIM = 3 # Using (x, y) coordinates, normalized
+LANDMARK_DIM = 3 # Using (x, y, z) coordinates
 
 # Model Hyperparameters (can be tuned)
 D_MODEL = 128       # Embedding dimension for Transformer
