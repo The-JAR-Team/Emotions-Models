@@ -58,11 +58,11 @@ NUM_LANDMARKS = 478 # Using refine_landmarks=True for FaceMesh
 LANDMARK_DIM = 3 # Using (x, y, z) coordinates
 
 # Model Hyperparameters (can be tuned)
-D_MODEL = 128       # Embedding dimension for Transformer
-NHEAD = 4           # Number of attention heads
-NUM_ENCODER_LAYERS = 4 # Number of Transformer encoder layers
-DIM_FEEDFORWARD = 256 # Dimension of feedforward network in Transformer
-DROPOUT = 0.3
+D_MODEL = 512       # Increased embedding dimension for Transformer (quadrupled)
+NHEAD = 8           # Increased number of attention heads
+NUM_ENCODER_LAYERS = 8 # Increased number of Transformer encoder layers
+DIM_FEEDFORWARD = 1024 # Increased dimension of feedforward network (quadrupled)
+DROPOUT = 0.2       # Lower dropout to help with capacity
 
 # Training Hyperparameters
 BATCH_SIZE = 64 # Increased slightly, adjust based on GPU memory
