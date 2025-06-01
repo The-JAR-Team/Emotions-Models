@@ -698,7 +698,7 @@ if __name__ == "__main__":
             input_names=['pixel_values'],
             output_names=['logits', 'embedding'], # Exporting both
             dynamic_axes=dynamic_axes,
-            opset_version=11, # Changed to 11 for broader compatibility
+            opset_version=13, # Changed to 13 to support aten::unflatten
             export_params=True
         )
         print("ONNX model exported successfully (outputs: logits, embedding).")
