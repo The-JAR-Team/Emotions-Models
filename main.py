@@ -75,7 +75,7 @@ DATA_AUG_CONFIG = {
 TRAINING_STAGES = [
     {
         "stage_name": "Stage 1: Initial Training (Warm-up)",
-        "num_train_epochs": 1,
+        "num_train_epochs": 15,
         "per_device_train_batch_size": 64,
         "per_device_eval_batch_size": 124,
         "learning_rate": 5e-5,
@@ -87,7 +87,7 @@ TRAINING_STAGES = [
     },
     {
         "stage_name": "Stage 2: Main Training (Standard Augmentation)",
-        "num_train_epochs": 1, # More epochs
+        "num_train_epochs": 30, # More epochs
         "per_device_train_batch_size": 64,
         "per_device_eval_batch_size": 124,
         "learning_rate": 2e-5, # Lower learning rate for fine-tuning
@@ -104,7 +104,7 @@ TRAINING_STAGES = [
     },
     {
         "stage_name": "Stage 3: Deep Fine-tuning (Aggressive Augmentation)",
-        "num_train_epochs": 1, # Fewer epochs, but with aggressive augmentation
+        "num_train_epochs": 10, # Fewer epochs, but with aggressive augmentation
         "per_device_train_batch_size": 64,
         "per_device_eval_batch_size": 124,
         "learning_rate": 5e-6, # Very low learning rate
