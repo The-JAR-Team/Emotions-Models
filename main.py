@@ -79,7 +79,7 @@ TRAINING_STAGES = [
         "per_device_train_batch_size": 64,
         "per_device_eval_batch_size": 124,
         "learning_rate": 5e-5,
-        "early_stopping_patience": 10,
+        "early_stopping_patience": 10, # This is for EarlyStoppingCallback
         "weight_decay": 0.0001,
         "warmup_ratio": 0.1,
         "fp16": True,
@@ -132,6 +132,7 @@ GREATER_IS_BETTER = True
 DATALOADER_NUM_WORKERS = 4
 DATALOADER_PIN_MEMORY = True
 REPORT_TO = "tensorboard"
+EARLY_STOPPING_PATIENCE = 10 # Re-added as a global default
 START_FROM_CHECKPOINT = False # Controls initial resume, subsequent stages resume from previous
 
 # --- MediaPipe Landmark Extraction ---
@@ -560,7 +561,10 @@ if __name__ == "__main__":
             train_emotion_dataset = EmotionLandmarkHFDataset(train_hf_data, "train", augment=USE_LANDMARK_AUGMENTATION, aug_config=current_aug_config)
         
         # Update training arguments for the current stage
-        # Use .copy() to avoid modifying the original stage_config dictionary directly
+        # Extract early_stopping_patience separately as it's for the callback, not TrainingArguments
+        current_early_stopping_patience = stage_config.get("early_stopping_patience", EARLY_STOPPING_PATIENCE)
+
+        # Explicitly define parameters for TrainingArguments, excluding 'early_stopping_patience'
         current_training_args_params = {
             "num_train_epochs": stage_config.get("num_train_epochs"),
             "per_device_train_batch_size": stage_config.get("per_device_train_batch_size"),
@@ -569,7 +573,6 @@ if __name__ == "__main__":
             "warmup_ratio": stage_config.get("warmup_ratio"),
             "weight_decay": stage_config.get("weight_decay"),
             "fp16": stage_config.get("fp16") and torch.cuda.is_available(),
-            "early_stopping_patience": stage_config.get("early_stopping_patience"),
         }
 
         # Re-calculate steps per epoch in case batch size changed
@@ -600,7 +603,7 @@ if __name__ == "__main__":
         # Re-initialize Trainer for each stage to pick up new training_args and potentially new dataset
         trainer = Trainer(model=model, args=training_args, train_dataset=train_emotion_dataset,
                           eval_dataset=eval_emotion_dataset, compute_metrics=compute_metrics_fn,
-                          callbacks=[EarlyStoppingCallback(early_stopping_patience=current_training_args_params["early_stopping_patience"])])
+                          callbacks=[EarlyStoppingCallback(early_stopping_patience=current_early_stopping_patience)]) # Pass to callback
 
         start_time = time.time()
         
