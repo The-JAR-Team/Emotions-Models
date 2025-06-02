@@ -35,7 +35,7 @@ LOCAL_FERPLUS_BASE_PATH = r"./FERPLUS" # Example: "C:/Users/User/Emo_Model/Emoti
 
 MODEL_DIR = "./emotion_transformer_ferplus_local_model_small_v1" # Updated for smaller model
 DATASET_CACHE_DIR = "./dataset_cache_ferplus_hub_v4" 
-ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "emotion_transformer_small_augV3.onnx")
+ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "emotion_transformer_small.onnx")
 REPORT_PATH = os.path.join(MODEL_DIR, "training_report_small.json")
 
 # FER+ has 8 emotion classes:
@@ -633,7 +633,8 @@ if __name__ == "__main__":
         if hasattr(eval_emotion_dataset, 'print_extraction_stats'): eval_emotion_dataset.print_extraction_stats()
 
         # Check if early stopping occurred in the current stage
-        if trainer.state.stopped_training:
+        # Corrected: Use trainer.control.should_training_stop
+        if trainer.control.should_training_stop:
             print(f"Early stopping triggered in {stage_config['stage_name']}. Halting staged training.")
             break # Exit the staged training loop
 
