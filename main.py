@@ -33,10 +33,10 @@ USE_LOCAL_FERPLUS_DATA = True # SET TO True TO USE YOUR LOCAL COPY
 LOCAL_FERPLUS_BASE_PATH = r"./FERPLUS" # Example: "C:/Users/User/Emo_Model/Emotions-Models/FERPLUS"
                                         # Or relative: "./FERPLUS" if FERPLUS dir is in the same dir as this script
 
-MODEL_DIR = "./emotion_transformer_ferplus_local_model_v4" 
+MODEL_DIR = "./emotion_transformer_ferplus_local_model_small_v1" # Updated for smaller model
 DATASET_CACHE_DIR = "./dataset_cache_ferplus_hub_v4" 
-ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "emotion_transformer.onnx")
-REPORT_PATH = os.path.join(MODEL_DIR, "training_report.json")
+ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "emotion_transformer_small.onnx")
+REPORT_PATH = os.path.join(MODEL_DIR, "training_report_small.json")
 
 # FER+ has 8 emotion classes:
 # 0:neutral, 1:happiness, 2:surprise, 3:sadness, 4:anger, 5:disgust, 6:fear, 7:contempt
@@ -46,14 +46,14 @@ EMOTION_COLUMNS = ['neutral', 'happiness', 'surprise', 'sadness', 'anger', 'disg
 NUM_LANDMARKS = 478 
 LANDMARK_DIM = 3 
 
-# Model Hyperparameters
-D_MODEL = 512
-NHEAD = 8
-NUM_ENCODER_LAYERS = 8
-DIM_FEEDFORWARD = 1024
-DROPOUT = 0.2
+# Model Hyperparameters (Reduced for a smaller model)
+D_MODEL = 128               # Was 512
+NHEAD = 4                   # Was 8 (must be a divisor of D_MODEL)
+NUM_ENCODER_LAYERS = 2      # Was 8
+DIM_FEEDFORWARD = 256       # Was 1024
+DROPOUT = 0.1 # Can keep dropout, or slightly reduce if model is too small and underfits
 
-# Training Hyperparameters
+# Training Hyperparameters (Kept from user's latest config)
 PER_DEVICE_TRAIN_BATCH_SIZE = 64
 PER_DEVICE_EVAL_BATCH_SIZE = 124
 LEARNING_RATE = 5e-5
@@ -129,21 +129,19 @@ class EmotionLandmarkLocalDataset(Dataset):
         row = self.df.iloc[idx]
         
         image_name_val = row['Image name']
-        if pd.isna(image_name_val): # Handle potential NaN values
-            # print(f"Warning: NaN found in 'Image name' for row index {idx} in {self.split_name}. Skipping item.")
+        if pd.isna(image_name_val): 
             self.failed_extractions += 1
             landmarks = np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32)
-            return {"pixel_values": torch.tensor(landmarks, dtype=torch.float32), "labels": torch.tensor(0, dtype=torch.long)} # Dummy item
-        image_name = str(image_name_val) # Ensure image_name is a string
+            return {"pixel_values": torch.tensor(landmarks, dtype=torch.float32), "labels": torch.tensor(0, dtype=torch.long)} 
+        image_name = str(image_name_val) 
 
         usage_val = row['Usage']
-        usage = str(usage_val) # Ensure usage is a string for dict key
+        usage = str(usage_val) 
 
         label = row['derived_label']
 
         folder_name = self.usage_to_folder.get(usage)
         if not folder_name:
-            # print(f"Warning: Unknown usage type '{usage}' for image {image_name} (row index {idx}) in {self.split_name}. Skipping item.")
             self.failed_extractions +=1
             landmarks = np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32)
             return {"pixel_values": torch.tensor(landmarks, dtype=torch.float32), "labels": torch.tensor(0, dtype=torch.long)}
@@ -152,7 +150,6 @@ class EmotionLandmarkLocalDataset(Dataset):
         try: 
             pil_image = Image.open(image_path)
         except FileNotFoundError:
-            # print(f"ERROR: Image not found at {image_path} (row index {idx}) in {self.split_name}. Skipping item.")
             self.failed_extractions += 1
             landmarks = np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32)
             return {"pixel_values": torch.tensor(landmarks, dtype=torch.float32), "labels": torch.tensor(0, dtype=torch.long)}
@@ -215,9 +212,9 @@ class EmotionLandmarkHFDataset(Dataset):
 
 # --- Transformer Model ---
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, dropout=DROPOUT, max_len=NUM_LANDMARKS + 50):
+    def __init__(self, d_model, dropout=DROPOUT, max_len=NUM_LANDMARKS + 50): # Use global DROPOUT
         super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
+        self.dropout = nn.Dropout(p=dropout) # Use the global DROPOUT from config
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
@@ -354,23 +351,24 @@ if __name__ == "__main__":
     print(f"Using Test dataset size: {len(test_emotion_dataset)}")
 
     print("\n--- Initializing Model ---")
-    config = EmotionTransformerConfig(num_classes=NUM_CLASSES)
+    config = EmotionTransformerConfig(num_classes=NUM_CLASSES, 
+                                      d_model=D_MODEL, nhead=NHEAD, 
+                                      num_encoder_layers=NUM_ENCODER_LAYERS, 
+                                      dim_feedforward=DIM_FEEDFORWARD, dropout=DROPOUT) # Pass all model hyperparams
     model = EmotionTransformerModel(config)
     print(f"Model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
 
     print("\n--- Setting up Trainer ---")
     if not os.path.exists(MODEL_DIR): os.makedirs(MODEL_DIR)
 
-    # Calculate steps_per_epoch for epoch-wise evaluation and saving
     steps_per_epoch = math.ceil(len(train_emotion_dataset) / PER_DEVICE_TRAIN_BATCH_SIZE)
     print(f"Approximate steps per epoch: {steps_per_epoch}")
     
-    # Ensure LOGGING_STEPS from config is used, or default to a fraction of steps_per_epoch
     effective_logging_steps = LOGGING_STEPS
-    if LOGGING_STRATEGY == "epoch": # If user explicitly wants epoch logging (not in current config)
+    if LOGGING_STRATEGY == "epoch":
         effective_logging_steps = steps_per_epoch
     elif LOGGING_STRATEGY == "steps":
-        effective_logging_steps = LOGGING_STEPS # Use the one from config
+        effective_logging_steps = LOGGING_STEPS 
 
     training_args = TrainingArguments(
         output_dir=os.path.join(MODEL_DIR, "training_checkpoints"),
@@ -380,15 +378,10 @@ if __name__ == "__main__":
         learning_rate=LEARNING_RATE,
         warmup_ratio=WARMUP_RATIO, 
         weight_decay=WEIGHT_DECAY, 
-        # Arguments from user config:
         logging_strategy=LOGGING_STRATEGY,
         logging_steps=effective_logging_steps,
-        # Use eval_steps and save_steps for epoch-like behavior
-        # This replaces evaluation_strategy="epoch" and save_strategy="epoch" for compatibility
-        evaluation_strategy="steps", # Must be "steps" if eval_steps is used
-        eval_steps=steps_per_epoch,  
-        save_strategy="steps",       # Must be "steps" if save_steps is used
-        save_steps=steps_per_epoch,  
+        eval_strategy="epoch", 
+        save_strategy="epoch",       
         save_total_limit=SAVE_TOTAL_LIMIT,
         load_best_model_at_end=LOAD_BEST_MODEL_AT_END, 
         metric_for_best_model=METRIC_FOR_BEST_MODEL, 
