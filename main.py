@@ -33,7 +33,7 @@ USE_LOCAL_FERPLUS_DATA = True # SET TO True TO USE YOUR LOCAL COPY
 LOCAL_FERPLUS_BASE_PATH = r"./FERPLUS" # Example: "C:/Users/User/Emo_Model/Emotions-Models/FERPLUS"
                                         # Or relative: "./FERPLUS" if FERPLUS dir is in the same dir as this script
 
-MODEL_DIR = "./emotion_transformer_ferplus_local_model_small_v1" # Updated for smaller model
+MODEL_DIR = "./emotion_transformer_ferplus_local_model_small_v1_1" # Updated for smaller model
 DATASET_CACHE_DIR = "./dataset_cache_ferplus_hub_v4" 
 ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "emotion_transformer_small.onnx")
 REPORT_PATH = os.path.join(MODEL_DIR, "training_report_small.json")
@@ -75,7 +75,7 @@ DATA_AUG_CONFIG = {
 TRAINING_STAGES = [
     {
         "stage_name": "Stage 1: Initial Training (Warm-up)",
-        "num_train_epochs": 15,
+        "num_train_epochs": 1,
         "per_device_train_batch_size": 64,
         "per_device_eval_batch_size": 124,
         "learning_rate": 5e-5,
@@ -87,7 +87,7 @@ TRAINING_STAGES = [
     },
     {
         "stage_name": "Stage 2: Main Training (Standard Augmentation)",
-        "num_train_epochs": 25, # More epochs
+        "num_train_epochs": 1, # More epochs
         "per_device_train_batch_size": 64,
         "per_device_eval_batch_size": 124,
         "learning_rate": 2e-5, # Lower learning rate for fine-tuning
@@ -104,7 +104,7 @@ TRAINING_STAGES = [
     },
     {
         "stage_name": "Stage 3: Deep Fine-tuning (Aggressive Augmentation)",
-        "num_train_epochs": 10, # Fewer epochs, but with aggressive augmentation
+        "num_train_epochs": 1, # Fewer epochs, but with aggressive augmentation
         "per_device_train_batch_size": 64,
         "per_device_eval_batch_size": 124,
         "learning_rate": 5e-6, # Very low learning rate
@@ -148,6 +148,7 @@ except Exception as e:
     face_mesh_processor = None
 
 def extract_landmarks_from_image(image_np_rgb, processor=face_mesh_processor):
+    # Corrected: Use 'is None' for None comparisons in Python
     if processor is None:
         return np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32), False
     results = processor.process(image_np_rgb)
@@ -612,23 +613,29 @@ if __name__ == "__main__":
 
         start_time = time.time()
         
-        # Resume from the last checkpoint if it exists, or start fresh for the first stage
-        # For subsequent stages, current_checkpoint will be the best model from the previous stage
-        if START_FROM_CHECKPOINT and i == 0: # Only check for external checkpoint at the very beginning
-            current_checkpoint = get_latest_checkpoint(MODEL_DIR)
-            if current_checkpoint: print(f"Attempting to resume training from: {current_checkpoint}")
-            else: print("No valid checkpoint found or START_FROM_CHECKPOINT is False. Starting from scratch.")
-        elif i > 0: # For subsequent stages, always try to resume from the last saved model
-            # Trainer automatically saves the best model to output_dir, which becomes the effective checkpoint
-            current_checkpoint = MODEL_DIR 
-            print(f"Resuming training for Stage {i+1} from model saved at: {current_checkpoint}")
+        # Determine checkpoint for current stage
+        resume_checkpoint_path = None
+        if i == 0 and START_FROM_CHECKPOINT:
+            # Only try to load an external checkpoint for the very first stage
+            # This is for resuming a multi-stage run that was previously stopped
+            # or starting from a pre-trained model not from this script's previous stages.
+            resume_checkpoint_path = get_latest_checkpoint(MODEL_DIR)
+            if resume_checkpoint_path:
+                print(f"Attempting to resume Stage 1 from external checkpoint: {resume_checkpoint_path}")
+            else:
+                print("No valid external checkpoint found for Stage 1. Starting from scratch.")
+        # For subsequent stages (i > 0), the 'model' object is already updated by the previous trainer.
+        # No need to load from disk again for intermediate stages.
+        # The 'model' variable itself carries the state from the previous stage.
 
 
         try:
-            trainer.train(resume_from_checkpoint=current_checkpoint)
+            trainer.train(resume_from_checkpoint=resume_checkpoint_path)
         except Exception as e:
             print(f"An error occurred during training in {stage_config['stage_name']}: {e}")
-            if "CUDA out of memory" in str(e): print("CUDA OOM: Try reducing BATCH_SIZE or model size.")
+            print("This often happens if you changed model hyperparameters (D_MODEL, NHEAD, etc.)")
+            print(f"and are trying to resume from a checkpoint saved by a model with a different architecture.")
+            print(f"Please delete the '{MODEL_DIR}' directory and try running the script again if this is the case.")
             exit()
         
         training_time = time.time() - start_time
