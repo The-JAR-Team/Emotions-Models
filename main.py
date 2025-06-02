@@ -114,7 +114,7 @@ TRAINING_STAGES = [
         "fp16": True,
         "augment_config_override": { # More aggressive augmentation
             "noise_std_dev": 0.01,
-            "scale_factor_range": 0.04,
+            "scale_factor_range": 0.03,
             "rotation_max_degrees": 10,
             "translation_max_offset": 0.02
         }
