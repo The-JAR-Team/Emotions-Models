@@ -46,11 +46,11 @@ EMOTION_COLUMNS = ['neutral', 'happiness', 'surprise', 'sadness', 'anger', 'disg
 NUM_LANDMARKS = 478 
 LANDMARK_DIM = 3 
 
-# Model Hyperparameters (Reduced for a smaller model)
-D_MODEL = 256               # Was 512
-NHEAD = 4                   # Was 8 (must be a divisor of D_MODEL)
-NUM_ENCODER_LAYERS = 4      # Was 8
-DIM_FEEDFORWARD = 256       # Was 1024
+# Model Hyperparameters (Slightly reduced for a smaller model)
+D_MODEL = 192               # Was 256, now 192 (must be divisible by NHEAD)
+NHEAD = 4                   # Kept at 4
+NUM_ENCODER_LAYERS = 3      # Was 4, now 3
+DIM_FEEDFORWARD = 192       # Was 256, now 192
 DROPOUT = 0.05 # Can keep dropout, or slightly reduce if model is too small and underfits
 
 # --- Data Augmentation Configuration for MediaPipe Landmarks ---
@@ -58,7 +58,7 @@ DROPOUT = 0.05 # Can keep dropout, or slightly reduce if model is too small and 
 USE_LANDMARK_AUGMENTATION = True 
 
 # Parameters for data augmentation, grouped for easier control.
-# These values are for "light" augmentation as requested.
+# These are the default "light" augmentation values.
 DATA_AUG_CONFIG = {
     "noise_std_dev": 0.005,      # Standard deviation for Gaussian noise (x, y, z)
     "scale_factor_range": 0.02,  # Range for random scaling, e.g., 0.02 for [0.98, 1.02]
@@ -74,52 +74,51 @@ DATA_AUG_CONFIG = {
 # augmentation parameters for that specific stage.
 TRAINING_STAGES = [
     {
-        "stage_name": "Stage 1: Initial Training",
-        "num_train_epochs": 20,
+        "stage_name": "Stage 1: Initial Training (Warm-up)",
+        "num_train_epochs": 15,
         "per_device_train_batch_size": 64,
         "per_device_eval_batch_size": 124,
         "learning_rate": 5e-5,
-        "early_stopping_patience": 10, # This is for EarlyStoppingCallback
+        "early_stopping_patience": 5, # Allow early stop if performance plateaus quickly
         "weight_decay": 0.0001,
         "warmup_ratio": 0.1,
         "fp16": True,
-        # Example: No override for stage 1, uses global DATA_AUG_CONFIG
+        # Uses global DATA_AUG_CONFIG for light augmentation
     },
     {
-        "stage_name": "Stage 2: Fine-tuning with lower LR and slightly more aug",
-        "num_train_epochs": 30, # Additional epochs after Stage 1
+        "stage_name": "Stage 2: Main Training (Standard Augmentation)",
+        "num_train_epochs": 25, # More epochs
         "per_device_train_batch_size": 64,
         "per_device_eval_batch_size": 124,
-        "learning_rate": 1e-5, # Lower learning rate
-        "early_stopping_patience": 15, # Potentially more patience for fine-tuning
+        "learning_rate": 2e-5, # Lower learning rate for fine-tuning
+        "early_stopping_patience": 8, # More patience than Stage 1
         "weight_decay": 0.0001,
-        "warmup_ratio": 0.05, # Less warmup for fine-tuning
+        "warmup_ratio": 0.05, # Less warmup
         "fp16": True,
-        "augment_config_override": { # Override augmentation for this stage
+        "augment_config_override": { # Slightly increased augmentation
             "noise_std_dev": 0.008,
             "scale_factor_range": 0.03,
             "rotation_max_degrees": 7,
             "translation_max_offset": 0.015
         }
     },
-    # Add more stages as needed, e.g., with different augmentation strengths or batch sizes
-    # {
-    #     "stage_name": "Stage 3: Aggressive Augmentation",
-    #     "num_train_epochs": 20,
-    #     "per_device_train_batch_size": 64,
-    #     "per_device_eval_batch_size": 124,
-    #     "learning_rate": 5e-6,
-    #     "early_stopping_patience": 10,
-    #     "weight_decay": 0.0001,
-    #     "warmup_ratio": 0.05,
-    #     "fp16": True,
-    #     "augment_config_override": { # Example of overriding augmentation for a stage
-    #         "noise_std_dev": 0.01,
-    #         "scale_factor_range": 0.05,
-    #         "rotation_max_degrees": 10,
-    #         "translation_max_offset": 0.02
-    #     }
-    # }
+    {
+        "stage_name": "Stage 3: Deep Fine-tuning (Aggressive Augmentation)",
+        "num_train_epochs": 10, # Fewer epochs, but with aggressive augmentation
+        "per_device_train_batch_size": 64,
+        "per_device_eval_batch_size": 124,
+        "learning_rate": 5e-6, # Very low learning rate
+        "early_stopping_patience": None, # Disable early stopping to force completion of this stage
+        "weight_decay": 0.0001,
+        "warmup_ratio": 0.02, # Minimal warmup
+        "fp16": True,
+        "augment_config_override": { # More aggressive augmentation
+            "noise_std_dev": 0.01,
+            "scale_factor_range": 0.04,
+            "rotation_max_degrees": 10,
+            "translation_max_offset": 0.02
+        }
+    }
 ]
 
 # Common Training Hyperparameters (can be overridden by stages)
@@ -132,7 +131,7 @@ GREATER_IS_BETTER = True
 DATALOADER_NUM_WORKERS = 4
 DATALOADER_PIN_MEMORY = True
 REPORT_TO = "tensorboard"
-EARLY_STOPPING_PATIENCE = 10 # Re-added as a global default
+EARLY_STOPPING_PATIENCE = 10 # Global default for early stopping patience
 START_FROM_CHECKPOINT = False # Controls initial resume, subsequent stages resume from previous
 
 # --- MediaPipe Landmark Extraction ---
@@ -562,6 +561,7 @@ if __name__ == "__main__":
         
         # Update training arguments for the current stage
         # Extract early_stopping_patience separately as it's for the callback, not TrainingArguments
+        # Use .get() with a default to handle cases where it might not be explicitly set in stage_config
         current_early_stopping_patience = stage_config.get("early_stopping_patience", EARLY_STOPPING_PATIENCE)
 
         # Explicitly define parameters for TrainingArguments, excluding 'early_stopping_patience'
@@ -601,9 +601,14 @@ if __name__ == "__main__":
         )
         
         # Re-initialize Trainer for each stage to pick up new training_args and potentially new dataset
+        # Only add EarlyStoppingCallback if patience is not None
+        callbacks = []
+        if current_early_stopping_patience is not None:
+            callbacks.append(EarlyStoppingCallback(early_stopping_patience=current_early_stopping_patience))
+
         trainer = Trainer(model=model, args=training_args, train_dataset=train_emotion_dataset,
                           eval_dataset=eval_emotion_dataset, compute_metrics=compute_metrics_fn,
-                          callbacks=[EarlyStoppingCallback(early_stopping_patience=current_early_stopping_patience)]) # Pass to callback
+                          callbacks=callbacks) # Pass the list of callbacks
 
         start_time = time.time()
         
@@ -632,11 +637,11 @@ if __name__ == "__main__":
         if hasattr(train_emotion_dataset, 'print_extraction_stats'): train_emotion_dataset.print_extraction_stats()
         if hasattr(eval_emotion_dataset, 'print_extraction_stats'): eval_emotion_dataset.print_extraction_stats()
 
-        # Check if early stopping occurred in the current stage
-        # Corrected: Use trainer.control.should_training_stop
+        # Removed the 'break' condition here. Training will now proceed to the next stage
+        # even if early stopping was triggered in the current stage.
         if trainer.control.should_training_stop:
-            print(f"Early stopping triggered in {stage_config['stage_name']}. Halting staged training.")
-            break # Exit the staged training loop
+            print(f"Note: Early stopping was triggered in {stage_config['stage_name']}, but continuing to next stage as per configuration.")
+
 
         # After each stage, save the model (Trainer does this automatically if save_strategy="epoch")
         # And ensure the model instance is updated to the best one if LOAD_BEST_MODEL_AT_END is True
@@ -645,7 +650,7 @@ if __name__ == "__main__":
         model = trainer.model # Ensure the model object is the one from the trainer (potentially best checkpoint)
         print(f"Model state updated after {stage_config['stage_name']}.")
 
-    print("\n--- All training stages completed or early stopped. ---")
+    print("\n--- All training stages completed. ---")
 
     print("\n--- Evaluating on Test Set ---")
     test_results = trainer.predict(test_emotion_dataset)
