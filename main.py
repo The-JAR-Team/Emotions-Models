@@ -53,25 +53,86 @@ NUM_ENCODER_LAYERS = 4      # Was 8
 DIM_FEEDFORWARD = 256       # Was 1024
 DROPOUT = 0.05 # Can keep dropout, or slightly reduce if model is too small and underfits
 
-# Training Hyperparameters (Kept from user's latest config)
-PER_DEVICE_TRAIN_BATCH_SIZE = 64
-PER_DEVICE_EVAL_BATCH_SIZE = 124
-LEARNING_RATE = 5e-5
-NUM_TRAIN_EPOCHS = 50
-WARMUP_RATIO = 0.1
-WEIGHT_DECAY = 0.0001
+# --- Data Augmentation Configuration for MediaPipe Landmarks ---
+# Set to True to enable data augmentation on the extracted MediaPipe landmarks.
+USE_LANDMARK_AUGMENTATION = True 
+
+# Parameters for data augmentation, grouped for easier control.
+# These values are for "light" augmentation as requested.
+DATA_AUG_CONFIG = {
+    "noise_std_dev": 0.005,      # Standard deviation for Gaussian noise (x, y, z)
+    "scale_factor_range": 0.02,  # Range for random scaling, e.g., 0.02 for [0.98, 1.02]
+    "rotation_max_degrees": 5,   # Maximum rotation angle in degrees for each axis (x, y, z)
+    "translation_max_offset": 0.01 # Maximum offset for random translation (x, y, z)
+}
+
+# --- Staged Training Configuration ---
+# Define multiple training stages. Each dictionary represents a stage's hyperparameters.
+# The 'num_train_epochs' and 'learning_rate' are typical parameters to vary.
+# Other TrainingArguments can be added here as needed for each stage.
+# You can also add 'augment_config_override' to any stage to use different
+# augmentation parameters for that specific stage.
+TRAINING_STAGES = [
+    {
+        "stage_name": "Stage 1: Initial Training",
+        "num_train_epochs": 20,
+        "per_device_train_batch_size": 64,
+        "per_device_eval_batch_size": 124,
+        "learning_rate": 5e-5,
+        "early_stopping_patience": 10,
+        "weight_decay": 0.0001,
+        "warmup_ratio": 0.1,
+        "fp16": True,
+        # Example: No override for stage 1, uses global DATA_AUG_CONFIG
+    },
+    {
+        "stage_name": "Stage 2: Fine-tuning with lower LR and slightly more aug",
+        "num_train_epochs": 30, # Additional epochs after Stage 1
+        "per_device_train_batch_size": 64,
+        "per_device_eval_batch_size": 124,
+        "learning_rate": 1e-5, # Lower learning rate
+        "early_stopping_patience": 15, # Potentially more patience for fine-tuning
+        "weight_decay": 0.0001,
+        "warmup_ratio": 0.05, # Less warmup for fine-tuning
+        "fp16": True,
+        "augment_config_override": { # Override augmentation for this stage
+            "noise_std_dev": 0.008,
+            "scale_factor_range": 0.03,
+            "rotation_max_degrees": 7,
+            "translation_max_offset": 0.015
+        }
+    },
+    # Add more stages as needed, e.g., with different augmentation strengths or batch sizes
+    # {
+    #     "stage_name": "Stage 3: Aggressive Augmentation",
+    #     "num_train_epochs": 20,
+    #     "per_device_train_batch_size": 64,
+    #     "per_device_eval_batch_size": 124,
+    #     "learning_rate": 5e-6,
+    #     "early_stopping_patience": 10,
+    #     "weight_decay": 0.0001,
+    #     "warmup_ratio": 0.05,
+    #     "fp16": True,
+    #     "augment_config_override": { # Example of overriding augmentation for a stage
+    #         "noise_std_dev": 0.01,
+    #         "scale_factor_range": 0.05,
+    #         "rotation_max_degrees": 10,
+    #         "translation_max_offset": 0.02
+    #     }
+    # }
+]
+
+# Common Training Hyperparameters (can be overridden by stages)
 LOGGING_STRATEGY = "steps" 
 LOGGING_STEPS = 100
 SAVE_TOTAL_LIMIT = 3
 LOAD_BEST_MODEL_AT_END = True
 METRIC_FOR_BEST_MODEL = "accuracy" 
 GREATER_IS_BETTER = True
-FP16_TRAINING = True 
 DATALOADER_NUM_WORKERS = 4
 DATALOADER_PIN_MEMORY = True
 REPORT_TO = "tensorboard"
-EARLY_STOPPING_PATIENCE = 10 
-START_FROM_CHECKPOINT = False
+START_FROM_CHECKPOINT = False # Controls initial resume, subsequent stages resume from previous
 
 # --- MediaPipe Landmark Extraction ---
 try:
@@ -111,9 +172,88 @@ def extract_landmarks_from_image(image_np_rgb, processor=face_mesh_processor):
         return landmarks_normalized_3d, True
     return np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32), False
 
+# --- Data Augmentation Functions ---
+# These functions now accept a config dictionary to get their parameters
+def apply_random_noise(landmarks, config):
+    """
+    Adds Gaussian noise to landmark coordinates.
+    Args:
+        landmarks (np.ndarray): Normalized 3D landmarks (NUM_LANDMARKS, LANDMARK_DIM).
+        config (dict): Configuration dictionary containing 'noise_std_dev'.
+    Returns:
+        np.ndarray: Augmented landmarks.
+    """
+    std_dev = config.get("noise_std_dev", 0.0) # Default to 0 if not found
+    noise = np.random.normal(loc=0.0, scale=std_dev, size=landmarks.shape).astype(np.float32)
+    return landmarks + noise
+
+def apply_random_scaling(landmarks, config):
+    """
+    Applies a random scaling factor to landmarks.
+    Args:
+        landmarks (np.ndarray): Normalized 3D landmarks (NUM_LANDMARKS, LANDMARK_DIM).
+        config (dict): Configuration dictionary containing 'scale_factor_range'.
+    Returns:
+        np.ndarray: Augmented landmarks.
+    """
+    scale_range = config.get("scale_factor_range", 0.0)
+    scale_factor = np.random.uniform(1.0 - scale_range, 1.0 + scale_range)
+    return landmarks * scale_factor
+
+def apply_random_rotation(landmarks, config):
+    """
+    Applies a random rotation (Euler angles) around the origin to landmarks.
+    Args:
+        landmarks (np.ndarray): Normalized 3D landmarks (NUM_LANDMARKS, LANDMARK_DIM).
+        config (dict): Configuration dictionary containing 'rotation_max_degrees'.
+    Returns:
+        np.ndarray: Augmented landmarks.
+    """
+    max_degrees = config.get("rotation_max_degrees", 0.0)
+    # Convert degrees to radians
+    max_radians = np.deg2rad(max_degrees)
+    
+    # Generate random rotation angles for x, y, z axes
+    alpha = np.random.uniform(-max_radians, max_radians) # Rotation around X-axis
+    beta = np.random.uniform(-max_radians, max_radians)  # Rotation around Y-axis
+    gamma = np.random.uniform(-max_radians, max_radians) # Rotation around Z-axis
+
+    # Rotation matrices for each axis
+    Rx = np.array([[1, 0, 0],
+                   [0, np.cos(alpha), -np.sin(alpha)],
+                   [0, np.sin(alpha), np.cos(alpha)]], dtype=np.float32)
+    
+    Ry = np.array([[np.cos(beta), 0, np.sin(beta)],
+                   [0, 1, 0],
+                   [-np.sin(beta), 0, np.cos(beta)]], dtype=np.float32)
+    
+    Rz = np.array([[np.cos(gamma), -np.sin(gamma), 0],
+                   [np.sin(gamma), np.cos(gamma), 0],
+                   [0, 0, 1]], dtype=np.float32)
+    
+    # Combined rotation matrix (order matters: ZYX usually)
+    R = Rz @ Ry @ Rx
+    
+    # Apply rotation to landmarks
+    return landmarks @ R.T # Transpose R because landmarks are (N, 3) and we want (3, 3) * (3, N)
+
+def apply_random_translation(landmarks, config):
+    """
+    Applies a random translation to landmarks.
+    Args:
+        landmarks (np.ndarray): Normalized 3D landmarks (NUM_LANDMARKS, LANDMARK_DIM).
+        config (dict): Configuration dictionary containing 'translation_max_offset'.
+    Returns:
+        np.ndarray: Augmented landmarks.
+    """
+    max_offset = config.get("translation_max_offset", 0.0)
+    translation_vector = np.random.uniform(-max_offset, max_offset, size=(1, LANDMARK_DIM)).astype(np.float32)
+    return landmarks + translation_vector
+
+
 # --- PyTorch Dataset for Local FER+ Data ---
 class EmotionLandmarkLocalDataset(Dataset):
-    def __init__(self, dataframe, image_base_path, split_name=""):
+    def __init__(self, dataframe, image_base_path, split_name="", augment=False, aug_config=None):
         self.df = dataframe
         self.image_base_path = image_base_path 
         self.split_name = split_name
@@ -121,10 +261,16 @@ class EmotionLandmarkLocalDataset(Dataset):
         self.failed_extractions = 0
         self.to_numpy = np.array
         self.usage_to_folder = {'Training': 'FER2013Train', 'PublicTest': 'FER2013Valid', 'PrivateTest': 'FER2013Test'}
+        self.augment = augment # Store augmentation flag
+        self.aug_config = aug_config if aug_config is not None else {} # Store augmentation config
         if self.split_name == "train" or len(self.df) > 1000:
             print(f"INFO: Landmark extraction for local '{self.split_name}' set ({len(self.df)} samples) is on-the-fly.")
             print("      This will be slow. For large-scale training, PRE-PROCESSING LANDMARKS IS CRITICAL.")
+            if self.augment:
+                print("      Data augmentation is ENABLED for this dataset split.")
+
     def __len__(self): return len(self.df)
+
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         
@@ -165,8 +311,18 @@ class EmotionLandmarkLocalDataset(Dataset):
         else: image_np_resized_rgb = image_np_rgb
         
         landmarks, success = extract_landmarks_from_image(image_np_resized_rgb)
-        if success: self.successful_extractions += 1
-        else: self.failed_extractions += 1
+        if success: 
+            self.successful_extractions += 1
+            # Apply data augmentation if enabled and it's a training split
+            if self.augment and self.split_name == "train_local_ferplus":
+                landmarks = apply_random_noise(landmarks, self.aug_config)
+                landmarks = apply_random_scaling(landmarks, self.aug_config)
+                landmarks = apply_random_rotation(landmarks, self.aug_config)
+                landmarks = apply_random_translation(landmarks, self.aug_config)
+        else: 
+            self.failed_extractions += 1
+            # If landmark extraction fails, return zeros, no augmentation
+            landmarks = np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32)
         
         return {"pixel_values": torch.tensor(landmarks, dtype=torch.float32), "labels": torch.tensor(label, dtype=torch.long)}
 
@@ -178,16 +334,22 @@ class EmotionLandmarkLocalDataset(Dataset):
 
 # --- PyTorch Dataset for Hugging Face datasets (Fallback) ---
 class EmotionLandmarkHFDataset(Dataset):
-    def __init__(self, hf_dataset_split, split_name=""):
+    def __init__(self, hf_dataset_split, split_name="", augment=False, aug_config=None):
         self.hf_dataset_split = hf_dataset_split
         self.split_name = split_name
         self.successful_extractions = 0
         self.failed_extractions = 0
         self.to_numpy = np.array
+        self.augment = augment # Store augmentation flag
+        self.aug_config = aug_config if aug_config is not None else {} # Store augmentation config
         if self.split_name == "train" or len(self.hf_dataset_split) > 1000:
             print(f"INFO (HF): Landmark extraction for '{self.split_name}' set ({len(self.hf_dataset_split)} samples) is on-the-fly.")
             print("      This will be slow. PRE-PROCESSING LANDMARKS IS CRITICAL for large datasets.")
+            if self.augment:
+                print("      Data augmentation is ENABLED for this dataset split.")
+
     def __len__(self): return len(self.hf_dataset_split)
+
     def __getitem__(self, idx):
         item = self.hf_dataset_split[idx]
         pil_image, label = item['image'], item['label'] 
@@ -200,10 +362,23 @@ class EmotionLandmarkHFDataset(Dataset):
             else: new_w, new_h = target_size, int(h * (target_size / w))
             image_np_resized_rgb = cv2.resize(image_np_rgb, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
         else: image_np_resized_rgb = image_np_rgb
+        
         landmarks, success = extract_landmarks_from_image(image_np_resized_rgb)
-        if success: self.successful_extractions += 1
-        else: self.failed_extractions += 1
+        if success: 
+            self.successful_extractions += 1
+            # Apply data augmentation if enabled and it's a training split
+            if self.augment and self.split_name == "train": # 'train' is the split name for HF dataset
+                landmarks = apply_random_noise(landmarks, self.aug_config)
+                landmarks = apply_random_scaling(landmarks, self.aug_config)
+                landmarks = apply_random_rotation(landmarks, self.aug_config)
+                landmarks = apply_random_translation(landmarks, self.aug_config)
+        else: 
+            self.failed_extractions += 1
+            # If landmark extraction fails, return zeros, no augmentation
+            landmarks = np.zeros((NUM_LANDMARKS, LANDMARK_DIM), dtype=np.float32)
+
         return {"pixel_values": torch.tensor(landmarks, dtype=torch.float32), "labels": torch.tensor(label, dtype=torch.long)}
+
     def print_extraction_stats(self):
         total_processed = self.successful_extractions + self.failed_extractions
         if total_processed == 0: print(f"Landmark extraction stats for '{self.split_name}': No items processed."); return
@@ -230,7 +405,7 @@ class EmotionTransformerConfig(PretrainedConfig):
                  nhead=NHEAD, num_encoder_layers=NUM_ENCODER_LAYERS, dim_feedforward=DIM_FEEDFORWARD,
                  dropout=DROPOUT, num_classes=NUM_CLASSES, **kwargs):
         self.num_landmarks, self.landmark_dim, self.d_model, self.nhead = num_landmarks, landmark_dim, d_model, nhead
-        self.num_encoder_layers, self.dim_feedforward, self.dropout, self.num_classes = num_encoder_layers, dim_feedforward, dropout, num_classes
+        self.num_encoder_layers, self.dim_feedforward, self.dropout, self.num_classes = num_classes, dim_feedforward, dropout, num_classes
         super().__init__(**kwargs)
 
 class EmotionTransformerModel(PreTrainedModel):
@@ -303,6 +478,8 @@ if __name__ == "__main__":
     
     train_emotion_dataset, eval_emotion_dataset, test_emotion_dataset = None, None, None
     dataset_source_name = ""
+    df_train, df_val, df_test = None, None, None # Initialize these for broader scope
+    train_hf_data, eval_hf_data, test_hf_data = None, None, None # Initialize these for broader scope
 
     if USE_LOCAL_FERPLUS_DATA:
         print(f"\n--- Attempting to load LOCAL FER+ dataset from: {LOCAL_FERPLUS_BASE_PATH} ---")
@@ -318,9 +495,10 @@ if __name__ == "__main__":
                 df_val = df[df['Usage'] == 'PublicTest'].reset_index(drop=True)
                 df_test = df[df['Usage'] == 'PrivateTest'].reset_index(drop=True)
                 if not (df_train.empty or df_val.empty or df_test.empty):
-                    train_emotion_dataset = EmotionLandmarkLocalDataset(df_train, LOCAL_FERPLUS_BASE_PATH, "train_local_ferplus")
-                    eval_emotion_dataset = EmotionLandmarkLocalDataset(df_val, LOCAL_FERPLUS_BASE_PATH, "eval_local_ferplus")
-                    test_emotion_dataset = EmotionLandmarkLocalDataset(df_test, LOCAL_FERPLUS_BASE_PATH, "test_local_ferplus")
+                    # Initial dataset creation (will be re-created per stage for augmentation)
+                    train_emotion_dataset = EmotionLandmarkLocalDataset(df_train, LOCAL_FERPLUS_BASE_PATH, "train_local_ferplus", augment=USE_LANDMARK_AUGMENTATION, aug_config=DATA_AUG_CONFIG)
+                    eval_emotion_dataset = EmotionLandmarkLocalDataset(df_val, LOCAL_FERPLUS_BASE_PATH, "eval_local_ferplus", augment=False) # No augmentation for evaluation
+                    test_emotion_dataset = EmotionLandmarkLocalDataset(df_test, LOCAL_FERPLUS_BASE_PATH, "test_local_ferplus", augment=False) # No augmentation for testing
                     dataset_source_name = f"Local FER+ ({LOCAL_FERPLUS_BASE_PATH})"
                     print(f"Successfully prepared local FER+ splits: Train={len(df_train)}, Val={len(df_val)}, Test={len(df_test)}")
                 else:
@@ -338,9 +516,10 @@ if __name__ == "__main__":
         try:
             ferplus_raw = load_dataset("microsoft/ferplus", cache_dir=DATASET_CACHE_DIR)
             train_hf_data, eval_hf_data, test_hf_data = ferplus_raw['train'], ferplus_raw['validation'], ferplus_raw['test']
-            train_emotion_dataset = EmotionLandmarkHFDataset(train_hf_data, "train_hub_ferplus")
-            eval_emotion_dataset = EmotionLandmarkHFDataset(eval_hf_data, "eval_hub_ferplus")
-            test_emotion_dataset = EmotionLandmarkHFDataset(test_hf_data, "test_hub_ferplus")
+            # Initial dataset creation (will be re-created per stage for augmentation)
+            train_emotion_dataset = EmotionLandmarkHFDataset(train_hf_data, "train", augment=USE_LANDMARK_AUGMENTATION, aug_config=DATA_AUG_CONFIG)
+            eval_emotion_dataset = EmotionLandmarkHFDataset(eval_hf_data, "validation", augment=False) # No augmentation for evaluation
+            test_emotion_dataset = EmotionLandmarkHFDataset(test_hf_data, "test", augment=False) # No augmentation for testing
             dataset_source_name = "microsoft/ferplus (Hugging Face Hub)"
             print("Successfully loaded FER+ from Hugging Face Hub.")
         except Exception as e:
@@ -358,62 +537,111 @@ if __name__ == "__main__":
     model = EmotionTransformerModel(config)
     print(f"Model initialized with {sum(p.numel() for p in model.parameters() if p.requires_grad):,} trainable parameters.")
 
-    print("\n--- Setting up Trainer ---")
-    if not os.path.exists(MODEL_DIR): os.makedirs(MODEL_DIR)
+    # --- Staged Training Loop ---
+    current_checkpoint = None
+    for i, stage_config in enumerate(TRAINING_STAGES):
+        print(f"\n--- Starting {stage_config['stage_name']} (Stage {i+1}/{len(TRAINING_STAGES)}) ---")
 
-    steps_per_epoch = math.ceil(len(train_emotion_dataset) / PER_DEVICE_TRAIN_BATCH_SIZE)
-    print(f"Approximate steps per epoch: {steps_per_epoch}")
-    
-    effective_logging_steps = LOGGING_STEPS
-    if LOGGING_STRATEGY == "epoch":
-        effective_logging_steps = steps_per_epoch
-    elif LOGGING_STRATEGY == "steps":
-        effective_logging_steps = LOGGING_STEPS 
+        # Determine the data augmentation config for the current stage
+        # If 'augment_config_override' is present, merge it with the global config.
+        # This allows for partial overrides.
+        if "augment_config_override" in stage_config:
+            print(f"Applying stage-specific data augmentation parameters for {stage_config['stage_name']}.")
+            # Create a new dictionary by copying global and then updating with stage-specific overrides
+            current_aug_config = {**DATA_AUG_CONFIG, **stage_config["augment_config_override"]}
+        else:
+            current_aug_config = DATA_AUG_CONFIG # Use the global default
 
-    training_args = TrainingArguments(
-        output_dir=os.path.join(MODEL_DIR, "training_checkpoints"),
-        num_train_epochs=NUM_TRAIN_EPOCHS,
-        per_device_train_batch_size=PER_DEVICE_TRAIN_BATCH_SIZE,
-        per_device_eval_batch_size=PER_DEVICE_EVAL_BATCH_SIZE,
-        learning_rate=LEARNING_RATE,
-        warmup_ratio=WARMUP_RATIO, 
-        weight_decay=WEIGHT_DECAY, 
-        logging_strategy=LOGGING_STRATEGY,
-        logging_steps=effective_logging_steps,
-        eval_strategy="epoch", 
-        save_strategy="epoch",       
-        save_total_limit=SAVE_TOTAL_LIMIT,
-        load_best_model_at_end=LOAD_BEST_MODEL_AT_END, 
-        metric_for_best_model=METRIC_FOR_BEST_MODEL, 
-        greater_is_better=GREATER_IS_BETTER,
-        fp16=FP16_TRAINING and torch.cuda.is_available(), 
-        report_to=REPORT_TO,
-        dataloader_num_workers=DATALOADER_NUM_WORKERS, 
-        dataloader_pin_memory=DATALOADER_PIN_MEMORY,
-        remove_unused_columns=False,
-    )
-    trainer = Trainer(model=model, args=training_args, train_dataset=train_emotion_dataset,
-                      eval_dataset=eval_emotion_dataset, compute_metrics=compute_metrics_fn,
-                      callbacks=[EarlyStoppingCallback(early_stopping_patience=EARLY_STOPPING_PATIENCE)])
+        # Re-initialize dataset with the current stage's augmentation config
+        # This is crucial because augmentation parameters are part of the dataset's __init__
+        if USE_LOCAL_FERPLUS_DATA:
+            train_emotion_dataset = EmotionLandmarkLocalDataset(df_train, LOCAL_FERPLUS_BASE_PATH, "train_local_ferplus", augment=USE_LANDMARK_AUGMENTATION, aug_config=current_aug_config)
+        else:
+            train_emotion_dataset = EmotionLandmarkHFDataset(train_hf_data, "train", augment=USE_LANDMARK_AUGMENTATION, aug_config=current_aug_config)
+        
+        # Update training arguments for the current stage
+        # Use .copy() to avoid modifying the original stage_config dictionary directly
+        current_training_args_params = {
+            "num_train_epochs": stage_config.get("num_train_epochs"),
+            "per_device_train_batch_size": stage_config.get("per_device_train_batch_size"),
+            "per_device_eval_batch_size": stage_config.get("per_device_eval_batch_size"),
+            "learning_rate": stage_config.get("learning_rate"),
+            "warmup_ratio": stage_config.get("warmup_ratio"),
+            "weight_decay": stage_config.get("weight_decay"),
+            "fp16": stage_config.get("fp16") and torch.cuda.is_available(),
+            "early_stopping_patience": stage_config.get("early_stopping_patience"),
+        }
 
-    print("\n--- Starting Training ---")
-    start_time = time.time()
-    checkpoint_to_resume = None
-    if START_FROM_CHECKPOINT:
-        checkpoint_to_resume = get_latest_checkpoint(MODEL_DIR)
-        if checkpoint_to_resume: print(f"Attempting to resume training from: {checkpoint_to_resume}")
-        else: print("No valid checkpoint found or START_FROM_CHECKPOINT is False. Starting from scratch.")
-    try:
-        trainer.train(resume_from_checkpoint=checkpoint_to_resume)
-    except Exception as e:
-        print(f"An error occurred during training: {e}")
-        if "CUDA out of memory" in str(e): print("CUDA OOM: Try reducing BATCH_SIZE or model size.")
-        exit()
-    training_time = time.time() - start_time
-    print(f"Training finished in {training_time / 60:.2f} minutes.")
+        # Re-calculate steps per epoch in case batch size changed
+        steps_per_epoch = math.ceil(len(train_emotion_dataset) / current_training_args_params["per_device_train_batch_size"])
+        effective_logging_steps = LOGGING_STEPS
+        if LOGGING_STRATEGY == "epoch":
+            effective_logging_steps = steps_per_epoch
+        elif LOGGING_STRATEGY == "steps":
+            effective_logging_steps = LOGGING_STEPS 
 
-    if hasattr(train_emotion_dataset, 'print_extraction_stats'): train_emotion_dataset.print_extraction_stats()
-    if hasattr(eval_emotion_dataset, 'print_extraction_stats'): eval_emotion_dataset.print_extraction_stats()
+        training_args = TrainingArguments(
+            output_dir=os.path.join(MODEL_DIR, "training_checkpoints"),
+            logging_strategy=LOGGING_STRATEGY,
+            logging_steps=effective_logging_steps,
+            eval_strategy="epoch", 
+            save_strategy="epoch",       
+            save_total_limit=SAVE_TOTAL_LIMIT,
+            load_best_model_at_end=LOAD_BEST_MODEL_AT_END, 
+            metric_for_best_model=METRIC_FOR_BEST_MODEL, 
+            greater_is_better=GREATER_IS_BETTER,
+            report_to=REPORT_TO,
+            dataloader_num_workers=DATALOADER_NUM_WORKERS, 
+            dataloader_pin_memory=DATALOADER_PIN_MEMORY,
+            remove_unused_columns=False,
+            **current_training_args_params # Unpack stage-specific parameters
+        )
+        
+        # Re-initialize Trainer for each stage to pick up new training_args and potentially new dataset
+        trainer = Trainer(model=model, args=training_args, train_dataset=train_emotion_dataset,
+                          eval_dataset=eval_emotion_dataset, compute_metrics=compute_metrics_fn,
+                          callbacks=[EarlyStoppingCallback(early_stopping_patience=current_training_args_params["early_stopping_patience"])])
+
+        start_time = time.time()
+        
+        # Resume from the last checkpoint if it exists, or start fresh for the first stage
+        # For subsequent stages, current_checkpoint will be the best model from the previous stage
+        if START_FROM_CHECKPOINT and i == 0: # Only check for external checkpoint at the very beginning
+            current_checkpoint = get_latest_checkpoint(MODEL_DIR)
+            if current_checkpoint: print(f"Attempting to resume training from: {current_checkpoint}")
+            else: print("No valid checkpoint found or START_FROM_CHECKPOINT is False. Starting from scratch.")
+        elif i > 0: # For subsequent stages, always try to resume from the last saved model
+            # Trainer automatically saves the best model to output_dir, which becomes the effective checkpoint
+            current_checkpoint = MODEL_DIR 
+            print(f"Resuming training for Stage {i+1} from model saved at: {current_checkpoint}")
+
+
+        try:
+            trainer.train(resume_from_checkpoint=current_checkpoint)
+        except Exception as e:
+            print(f"An error occurred during training in {stage_config['stage_name']}: {e}")
+            if "CUDA out of memory" in str(e): print("CUDA OOM: Try reducing BATCH_SIZE or model size.")
+            exit()
+        
+        training_time = time.time() - start_time
+        print(f"{stage_config['stage_name']} finished in {training_time / 60:.2f} minutes.")
+
+        if hasattr(train_emotion_dataset, 'print_extraction_stats'): train_emotion_dataset.print_extraction_stats()
+        if hasattr(eval_emotion_dataset, 'print_extraction_stats'): eval_emotion_dataset.print_extraction_stats()
+
+        # Check if early stopping occurred in the current stage
+        if trainer.state.stopped_training:
+            print(f"Early stopping triggered in {stage_config['stage_name']}. Halting staged training.")
+            break # Exit the staged training loop
+
+        # After each stage, save the model (Trainer does this automatically if save_strategy="epoch")
+        # And ensure the model instance is updated to the best one if LOAD_BEST_MODEL_AT_END is True
+        # The trainer.model will already be the best model if load_best_model_at_end is True.
+        # For next stage, we just use the current model instance.
+        model = trainer.model # Ensure the model object is the one from the trainer (potentially best checkpoint)
+        print(f"Model state updated after {stage_config['stage_name']}.")
+
+    print("\n--- All training stages completed or early stopped. ---")
 
     print("\n--- Evaluating on Test Set ---")
     test_results = trainer.predict(test_emotion_dataset)
