@@ -20,3 +20,6 @@ emotion_transformer_affectnet_model/*
 !emotion_transformer_affectnet_model/training_checkpoints/**/*.onnx
 !emotion_transformer_affectnet_model/training_checkpoints/**/*.onnx
 !emotion_transformer_affectnet_model/training_checkpoints/**/*.onnx
+FER2013Test/
+FER2013Train/
+FER2013Val/
