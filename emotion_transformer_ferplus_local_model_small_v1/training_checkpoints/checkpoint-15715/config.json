@@ -1,0 +1,16 @@
+{
+  "architectures": [
+    "EmotionTransformerModel"
+  ],
+  "d_model": 256,
+  "dim_feedforward": 256,
+  "dropout": 0.1,
+  "landmark_dim": 3,
+  "model_type": "emotion_transformer",
+  "nhead": 4,
+  "num_classes": 8,
+  "num_encoder_layers": 4,
+  "num_landmarks": 478,
+  "torch_dtype": "float32",
+  "transformers_version": "4.52.4"
+}

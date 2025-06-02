@@ -3,9 +3,9 @@
     "model_configuration": {
         "num_landmarks": 478,
         "landmark_dim": 3,
-        "d_model": 128,
+        "d_model": 256,
         "nhead": 4,
-        "num_encoder_layers": 2,
+        "num_encoder_layers": 4,
         "dim_feedforward": 256,
         "dropout": 0.1,
         "num_classes": 8,
@@ -91,7 +91,7 @@
         "eval_delay": 0,
         "torch_empty_cache_steps": null,
         "learning_rate": 5e-05,
-        "weight_decay": 0.01,
+        "weight_decay": 0.02,
         "adam_beta1": 0.9,
         "adam_beta2": 0.999,
         "adam_epsilon": 1e-08,
@@ -105,7 +105,7 @@
         "log_level": "passive",
         "log_level_replica": "warning",
         "log_on_each_node": true,
-        "logging_dir": "./emotion_transformer_ferplus_local_model_small_v1\\training_checkpoints\\runs\\Jun02_11-24-08_DESKTOP-NLLSGKN",
+        "logging_dir": "./emotion_transformer_ferplus_local_model_small_v1\\training_checkpoints\\runs\\Jun02_14-26-09_DESKTOP-NLLSGKN",
         "logging_strategy": "steps",
         "logging_first_step": false,
         "logging_steps": 100,
@@ -218,16 +218,16 @@
         "eval_use_gather_object": false,
         "average_tokens_across_devices": false
     },
-    "training_time_minutes": 152.6704909960429,
+    "training_time_minutes": 129.7427793900172,
     "test_set_metrics": {
-        "test_loss": 1.2294882535934448,
-        "test_accuracy": 0.6012816940651993,
-        "test_f1": 0.5370179289501084,
-        "test_precision": 0.5772136734820896,
-        "test_recall": 0.6012816940651993,
-        "test_runtime": 64.9839,
-        "test_samples_per_second": 55.229,
-        "test_steps_per_second": 0.446
+        "test_loss": 1.0183638334274292,
+        "test_accuracy": 0.6492059069378657,
+        "test_f1": 0.5985390342282207,
+        "test_precision": 0.6272309350376001,
+        "test_recall": 0.6492059069378657,
+        "test_runtime": 54.7926,
+        "test_samples_per_second": 65.502,
+        "test_steps_per_second": 0.529
     },
     "landmark_extraction_stats": {
         "train": {
