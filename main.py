@@ -35,7 +35,7 @@ LOCAL_FERPLUS_BASE_PATH = r"./FERPLUS" # Example: "C:/Users/User/Emo_Model/Emoti
 
 MODEL_DIR = "./emotion_transformer_ferplus_local_model_small_v1" # Updated for smaller model
 DATASET_CACHE_DIR = "./dataset_cache_ferplus_hub_v4" 
-ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "emotion_transformer_small.onnx")
+ONNX_MODEL_PATH = os.path.join(MODEL_DIR, "emotion_transformer_small_augV3.onnx")
 REPORT_PATH = os.path.join(MODEL_DIR, "training_report_small.json")
 
 # FER+ has 8 emotion classes:
