@@ -47,9 +47,9 @@ NUM_LANDMARKS = 478
 LANDMARK_DIM = 3 
 
 # Model Hyperparameters (Reduced for a smaller model)
-D_MODEL = 128               # Was 512
+D_MODEL = 256               # Was 512
 NHEAD = 4                   # Was 8 (must be a divisor of D_MODEL)
-NUM_ENCODER_LAYERS = 2      # Was 8
+NUM_ENCODER_LAYERS = 4      # Was 8
 DIM_FEEDFORWARD = 256       # Was 1024
 DROPOUT = 0.1 # Can keep dropout, or slightly reduce if model is too small and underfits
 
@@ -59,7 +59,7 @@ PER_DEVICE_EVAL_BATCH_SIZE = 124
 LEARNING_RATE = 5e-5
 NUM_TRAIN_EPOCHS = 50
 WARMUP_RATIO = 0.1
-WEIGHT_DECAY = 0.01
+WEIGHT_DECAY = 0.02
 LOGGING_STRATEGY = "steps" 
 LOGGING_STEPS = 100
 SAVE_TOTAL_LIMIT = 3
